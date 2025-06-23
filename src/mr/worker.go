@@ -1,58 +1,99 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+	"os"
+	"path/filepath"
+)
 
-
-//
 // Map functions return a slice of KeyValue.
-//
 type KeyValue struct {
 	Key   string
 	Value string
 }
 
-//
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
-//
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
-//
 // main/mrworker.go calls this function.
-//
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	var workerId uint8
+	var nReducers uint8
 
-	// Your worker implementation here.
+	params := Ready()
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	workerId = params.WorkerId
+	nReducers = params.nReducers
+	taskType := params.taskType
 
+	switch taskType {
+	case MAP:
+		fileNames := getMapFiles()
+		content, err := os.ReadFile(fileNames[params.taskId])
+		if err != nil {
+			log.Fatalf("Cannot open %v", fileNames[params.taskId])
+			break
+		}
+
+		keyValue := mapf(fileNames[params.taskId], string(content))
+		files := make([]*os.File, nReducers)
+
+		for i := 0; i < int(nReducers); i++ {
+			filename := fmt.Sprintf("mr-%v-%d", params.taskId, i)
+			file, err := os.Create(filename)
+			if err != nil {
+				log.Fatalf("Cannot create file mr-%v-%d", params.taskId, i)
+				break
+			}
+
+			files[i] = file
+		}
+
+		for _, entry := range keyValue {
+			reducerIndex := ihash(entry.Key) % int(nReducers)
+			fmt.Fprintf(files[reducerIndex], "%v %v", entry.Key, entry.Value)
+		}
+
+	case REDUCE:
+		break
+	default:
+		break
+	}
 }
 
-//
 // example function to show how to make an RPC call to the coordinator.
-//
+func Ready() Params {
+	reply := Reply{}
+
+	ok := call("Coordinator.Ready", nil, &reply)
+
+	if ok {
+		return reply.params
+	}
+
+	fmt.Printf("call failed!\n")
+	return Params{}
+}
+
 // the RPC argument and reply types are defined in rpc.go.
-//
 func CallExample() {
 
 	// declare an argument structure.
-	args := ExampleArgs{}
+	args := Args{}
 
 	// fill in the argument(s).
-	args.X = 99
 
 	// declare a reply structure.
-	reply := ExampleReply{}
+	reply := Reply{}
 
 	// send the RPC request, wait for the reply.
 	// the "Coordinator.Example" tells the
@@ -61,17 +102,15 @@ func CallExample() {
 	ok := call("Coordinator.Example", &args, &reply)
 	if ok {
 		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
+		return
 	} else {
 		fmt.Printf("call failed!\n")
 	}
 }
 
-//
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
-//
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()
@@ -88,4 +127,13 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+func getMapFiles() []string {
+	files, err := filepath.Glob("pg-*.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return files
 }
