@@ -1,12 +1,15 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
 )
+
+const N_REDUCERS = 3
 
 type Coordinator struct {
 	mapTasks       []uint8
@@ -16,47 +19,50 @@ type Coordinator struct {
 }
 
 // Your code here -- RPC handlers for the worker to call.
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *Args, reply *Reply) error {
-	return nil
-}
-
 func (c *Coordinator) Ready(args *Args, reply *Reply) error {
 	// create workerId
-	workerId := c.workersCounter
-	c.workersCounter = c.workersCounter + 1
+	var workerId uint8
+
+	if args.WorkerId == 0 {
+		workerId = c.workersCounter
+		c.workersCounter = c.workersCounter + 1
+	} else {
+		workerId = args.WorkerId
+	}
+
+	fmt.Printf("Worker with ID %v is Ready\n", workerId)
+
 	// check if there is a ready map task
 	if !c.isAllMapTasksDone() {
 		for key, task := range c.mapTasks {
 			if task == PENDING {
-				reply.params = Params{
-					WorkerId: workerId,
-					taskType: MAP,
-					taskId:   uint8(key),
-					nReducers: ,
-				}
-
+				reply.WorkerId = workerId
+				reply.TaskType = MAP
+				reply.TaskId = uint8(key)
+				reply.NReducers = N_REDUCERS
 				c.mapTasks[key] = RUNNING
+				fmt.Printf("Assignment\n - Worker ID: %v\n - TaskID:%v\n - Task type: %s\n", workerId, key, MAP)
 				return nil
 			}
 		}
-	} else if !c.isAllReduceTasksDone() {
+	} else if c.isAllMapTasksDone() && !c.isAllReduceTasksDone() {
 		for key, task := range c.reduceTasks {
 			if task == PENDING {
-				reply.params = Params{
-					WorkerId: workerId,
-					taskType: REDUCE,
-					taskId:   uint8(key),
-				}
+				reply.WorkerId = workerId
+				reply.TaskType = REDUCE
+				reply.TaskId = uint8(key)
+				reply.NReducers = N_REDUCERS
 
 				c.reduceTasks[key] = RUNNING
+
+				fmt.Printf("Sending Worker with ID %v %v task with TaskID %v\n", workerId, REDUCE, key)
 				return nil
 			}
 
 		}
+	} else if c.isAllMapTasksDone() && c.isAllReduceTasksDone() {
+		reply.TaskType = FINISH
+		return nil
 	}
 
 	return nil
@@ -120,15 +126,15 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.nReducers = uint8(nReduce)
 
 	// Your code here.
-	for range files {
-		c.mapTasks = append(c.mapTasks, PENDING)
+	for key := range files {
+		c.mapTasks[key] = PENDING
 	}
 
-	for range c.nReducers {
-		c.reduceTasks = append(c.reduceTasks, PENDING)
+	for key := range c.reduceTasks {
+		c.reduceTasks[key] = PENDING
 	}
 
-	c.workersCounter = 0
+	c.workersCounter = 1
 
 	c.server()
 	return &c

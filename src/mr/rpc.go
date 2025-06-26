@@ -16,19 +16,17 @@ import (
 // and reply for an RPC.
 //
 
-type Params struct {
-	WorkerId  uint8
-	taskId    uint8
-	taskType  string
-	nReducers uint8
-}
-
 type Args struct {
-	params Params
+	WorkerId uint8
+	TaskId   uint8
+	TaskType string
 }
 
 type Reply struct {
-	params Params
+	WorkerId  uint8
+	TaskId    uint8
+	TaskType  string
+	NReducers uint8
 }
 
 // Add your RPC definitions here.
@@ -51,3 +49,4 @@ const (
 
 const MAP = "MAP"
 const REDUCE = "REDUCE"
+const FINISH = "FINISH"

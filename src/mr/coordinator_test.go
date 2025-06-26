@@ -61,7 +61,7 @@ func TestReadyRpc(t *testing.T) {
 
 	c.Ready(&args, &reply)
 
-	if reply.params.taskType == REDUCE {
+	if reply.TaskType == REDUCE {
 		t.Errorf("task type should return true")
 	}
 
