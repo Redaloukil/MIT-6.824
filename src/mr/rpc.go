@@ -17,16 +17,16 @@ import (
 //
 
 type Args struct {
-	WorkerId uint8
 	TaskId   uint8
 	TaskType string
+	Filename string
 }
 
 type Reply struct {
-	WorkerId  uint8
 	TaskId    uint8
 	TaskType  string
 	NReducers uint8
+	Filename  string
 }
 
 // Add your RPC definitions here.

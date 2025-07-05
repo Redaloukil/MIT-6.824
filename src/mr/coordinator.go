@@ -7,62 +7,72 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
-const N_REDUCERS = 3
-
 type Coordinator struct {
-	mapTasks       []uint8
-	reduceTasks    []uint8
-	nReducers      uint8
-	workersCounter uint8
+	files       []string
+	mapTasks    []uint8
+	reduceTasks []uint8
+	nReducers   uint8
+	mu          sync.Mutex
 }
 
-// Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) Ready(args *Args, reply *Reply) error {
-	// create workerId
-	var workerId uint8
-
-	if args.WorkerId == 0 {
-		workerId = c.workersCounter
-		c.workersCounter = c.workersCounter + 1
-	} else {
-		workerId = args.WorkerId
-	}
-
-	fmt.Printf("Worker with ID %v is Ready\n", workerId)
-
-	// check if there is a ready map task
-	if !c.isAllMapTasksDone() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.allMapTasksAreDone() {
 		for key, task := range c.mapTasks {
 			if task == PENDING {
-				reply.WorkerId = workerId
 				reply.TaskType = MAP
 				reply.TaskId = uint8(key)
-				reply.NReducers = N_REDUCERS
+				reply.NReducers = c.nReducers
+				reply.Filename = c.files[key]
+
 				c.mapTasks[key] = RUNNING
-				fmt.Printf("Assignment\n - Worker ID: %v\n - TaskID:%v\n - Task type: %s\n", workerId, key, MAP)
+
+				fmt.Printf("Assigning : TaskID: %v Task type: %s\n", reply.TaskId, MAP)
+
 				return nil
 			}
 		}
-	} else if c.isAllMapTasksDone() && !c.isAllReduceTasksDone() {
+
+		return nil
+	}
+
+	if c.allMapTasksAreDone() && !c.allReduceTasksAreDone() {
 		for key, task := range c.reduceTasks {
 			if task == PENDING {
-				reply.WorkerId = workerId
 				reply.TaskType = REDUCE
 				reply.TaskId = uint8(key)
-				reply.NReducers = N_REDUCERS
-
+				reply.NReducers = c.nReducers
 				c.reduceTasks[key] = RUNNING
 
-				fmt.Printf("Sending Worker with ID %v %v task with TaskID %v\n", workerId, REDUCE, key)
+				fmt.Printf("Assigning : TaskID: %v Task type: %s\n", reply.TaskId, REDUCE)
 				return nil
 			}
-
 		}
-	} else if c.isAllMapTasksDone() && c.isAllReduceTasksDone() {
-		reply.TaskType = FINISH
+
 		return nil
+	}
+
+	reply.TaskType = FINISH
+	reply.TaskId = uint8(0)
+
+	return nil
+}
+
+func (c *Coordinator) TaskDone(args *Args, reply *Reply) error {
+	fmt.Printf("Assignment Done: TaskID: %v Task type: %s\n", args.TaskId, args.TaskType)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	switch args.TaskType {
+	case MAP:
+		c.mapTasks[args.TaskId] = DONE
+
+	case REDUCE:
+		c.reduceTasks[args.TaskId] = DONE
 	}
 
 	return nil
@@ -82,21 +92,18 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-// main/mrcoordinator.go calls Done() periodically to find out
-// if the entire job has finished.
 func (c *Coordinator) Done() bool {
 	ret := false
 
-	if c.isAllReduceTasksDone() && c.isAllMapTasksDone() {
+	if c.allReduceTasksAreDone() && c.allMapTasksAreDone() {
 		ret = true
 	}
-	// Your code here.
 
 	return ret
 }
 
 // check if all the map tasks are done
-func (c *Coordinator) isAllMapTasksDone() bool {
+func (c *Coordinator) allMapTasksAreDone() bool {
 	for _, status := range c.mapTasks {
 		if status != DONE {
 			return false
@@ -106,7 +113,7 @@ func (c *Coordinator) isAllMapTasksDone() bool {
 	return true
 }
 
-func (c *Coordinator) isAllReduceTasksDone() bool {
+func (c *Coordinator) allReduceTasksAreDone() bool {
 	for _, status := range c.reduceTasks {
 		if status != DONE {
 			return false
@@ -121,6 +128,7 @@ func (c *Coordinator) isAllReduceTasksDone() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
+	c.files = files
 	c.mapTasks = make([]uint8, len(files))
 	c.reduceTasks = make([]uint8, nReduce)
 	c.nReducers = uint8(nReduce)
@@ -134,8 +142,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		c.reduceTasks[key] = PENDING
 	}
 
-	c.workersCounter = 1
-
 	c.server()
+
 	return &c
 }

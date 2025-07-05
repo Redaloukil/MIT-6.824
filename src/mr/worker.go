@@ -9,8 +9,9 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"strings"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -19,57 +20,50 @@ type KeyValue struct {
 	Value string
 }
 
-// use ihash(key) % NReduce to choose the reduce
-// task number for each KeyValue emitted by Map.
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-// main/mrworker.go calls this function.
 func Worker(mapFunction func(string, string) []KeyValue, reduceFunction func(string, []string) string) {
-
 	var args Args
 	var reply Reply
-	var workerId uint8
 
 	for {
 		Ready(&args, &reply)
 
-		if workerId == 0 {
-			fmt.Printf("Worker ID %v has been assigned to the process\n", reply.WorkerId)
-		}
-
-		workerId = reply.WorkerId
 		nReducers := reply.NReducers
 		taskType := reply.TaskType
+		filename := reply.Filename
 		taskId := reply.TaskId
 
 		switch taskType {
 		case MAP:
-			fmt.Printf("Assignment\n - Task ID: %v\n - Task type: %s\n", taskId, MAP)
+			fmt.Printf("[WORKER] Assignment: Task ID: %v Task type: %s\n", taskId, MAP)
+			content, err := os.ReadFile(filename)
 
-			fileNames, err := getMapFiles()
 			if err != nil {
-				log.Fatalf("Cannot open files")
+				log.Printf("Cannot open %v: %v", filename, err)
 				break
 			}
 
-			content, err := os.ReadFile(fileNames[taskId])
-			if err != nil {
-				log.Fatalf("Cannot open %v", fileNames[taskId])
-				break
-			}
-
-			keyValue := mapFunction(fileNames[taskId], string(content))
+			keyValue := mapFunction(filename, string(content))
 			files := make([]*os.File, nReducers)
 
 			for i := 0; i < int(nReducers); i++ {
 				filename := fmt.Sprintf("mr-%v-%d", taskId, i)
 				file, err := os.Create(filename)
 				if err != nil {
-					log.Fatalf("Cannot create file mr-%v-%d", taskId, i)
+					log.Printf("Cannot create file mr-%v-%d: %v", taskId, i, err)
 					break
 				}
 				files[i] = file
@@ -80,57 +74,107 @@ func Worker(mapFunction func(string, string) []KeyValue, reduceFunction func(str
 				fmt.Fprintf(files[reducerIndex], "%v %v\n", entry.Key, entry.Value)
 			}
 
-			args.WorkerId = workerId
-			args.TaskType = MAP
-			args.TaskId = taskId
+			for _, f := range files {
+				if f != nil {
+					f.Close()
+				}
+			}
+
+			responseArgs := Args{
+				TaskType: MAP,
+				TaskId:   taskId,
+			}
+
+			TaskDone(&responseArgs, nil)
 
 		case REDUCE:
-			fmt.Printf("Assignment\n - Task ID: %v\n - Task type: %s\n", taskId, REDUCE)
+			fmt.Printf("[WORKER] Assignment: Task ID: %v Task type: %s\n", taskId, REDUCE)
 
 			files, err := getReduceFiles(taskId)
 			if err != nil {
-				log.Fatalf("Cannot open files")
+				log.Printf("Cannot open reduce files: %v", err)
 				break
 			}
 
+			var intermediate []KeyValue
 			for _, file := range files {
-				f, err := os.Open(file)
+				content, err := os.Open(file)
 				if err != nil {
-					break
-				}
-				defer f.Close()
-
-				scanner := bufio.NewScanner(f)
-
-				parts := strings.Fields(scanner.Text()) // splits by spaces
-				if len(parts) != 2 {
 					continue
 				}
 
-				word := parts[0]
-				count, err := strconv.Atoi(parts[1])
-
-				if err != nil {
-					fmt.Printf("Invalid count in file %s: %v\n", file, err)
-					continue
+				scanner := bufio.NewScanner(content)
+				for scanner.Scan() {
+					parts := strings.Fields(scanner.Text())
+					if len(parts) < 2 {
+						continue
+					}
+					word := parts[0]
+					count := parts[1]
+					intermediate = append(intermediate, KeyValue{word, count})
 				}
-
-				wordCount[word] += count
+				if err := scanner.Err(); err != nil {
+					fmt.Println("Scanner error:", err)
+				}
+				content.Close() // Close file after reading
 			}
 
-			scanner := bufio.NewScanner(content)
+			sort.Sort(ByKey(intermediate))
 
-			args.WorkerId = workerId
-			args.TaskType = REDUCE
-			args.TaskId = taskId
+			oname := fmt.Sprintf("mr-out-%d", taskId)
+			ofile, err := os.Create(oname)
+			if err != nil {
+				log.Printf("Cannot create output file %v: %v", oname, err)
+				break
+			}
 
+			i := 0
+			for i < len(intermediate) {
+				j := i + 1
+				for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, intermediate[k].Value)
+				}
+				output := reduceFunction(intermediate[i].Key, values)
+				fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+				i = j
+			}
+			ofile.Close()
+
+			sendDoneArgs := Args{
+				TaskType: REDUCE,
+				TaskId:   taskId,
+			}
+
+			TaskDone(&sendDoneArgs, nil)
+		case FINISH:
+			fmt.Println("[WORKER] Received FINISH signal, exiting.")
+			return
 		}
+
+		reply.TaskId = 0
+		reply.TaskType = ""
+		time.Sleep(time.Second * 5)
 	}
 }
 
 // example function to show how to make an RPC call to the coordinator.
 func Ready(args *Args, reply *Reply) error {
 	ok := call("Coordinator.Ready", &args, &reply)
+
+	if ok {
+		return nil
+	} else {
+		fmt.Printf("call failed!\n")
+		return nil
+	}
+}
+
+func TaskDone(args *Args, reply *Reply) error {
+	ok := call("Coordinator.TaskDone", &args, &reply)
 
 	if ok {
 		return nil
@@ -163,17 +207,8 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	return false
 }
 
-func getMapFiles() ([]string, error) {
-	files, err := filepath.Glob("pg-*.txt")
-	if err != nil {
-		return nil, errors.New("cannot read the files")
-	}
-
-	return files, nil
-}
-
 func getReduceFiles(reduceNumber uint8) ([]string, error) {
-	glob := fmt.Sprintf("mr-*-%d.txt", reduceNumber)
+	glob := fmt.Sprintf("mr-*%d", reduceNumber)
 	files, err := filepath.Glob(glob)
 	if err != nil {
 		return nil, errors.New("cannot read the files")

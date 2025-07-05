@@ -8,14 +8,14 @@ func TestIsAllMapTasksDone(t *testing.T) {
 	}
 
 	c.mapTasks = []uint8{DONE, DONE, DONE, PENDING}
-	isAllMapTasksDone := c.isAllMapTasksDone()
+	isAllMapTasksDone := c.allMapTasksAreDone()
 
 	if isAllMapTasksDone == true {
 		t.Errorf("isAllMapTasksDone should return false")
 	}
 
 	c.mapTasks = []uint8{DONE, DONE, DONE, DONE}
-	isAllMapTasksDone = c.isAllMapTasksDone()
+	isAllMapTasksDone = c.allMapTasksAreDone()
 
 	if isAllMapTasksDone == false {
 		t.Errorf("isAllMapTasksDone should return false")
