@@ -1,0 +1,26 @@
+todo :
+
+1.  Keep the state of the maps and reduce tasks in the coordinator process: 
+make sure that the coordinator keep track of map and reduce pending, running and done tasks. on initial phase, all map and reduce tasks should be assigned 'PENDING' status
+
+2.  Create Ready rpc, ready rpc accepts worker, keep its id in a state and return back the task to do. I will create a data structure representing the rpc parameters, which will be represented by : 
+  struct Message {
+    workerId
+    taskId
+    taskType
+  }
+
+when the worker calls Ready rpc, the coordinator return an object consisting of 
+  {
+    workerId
+    taskId
+    tasktype
+  }
+
+3. Create ready rpc call in worker code, the worker will send ready rpc with no argument and will get back reply with the specified id and task it needs to work on.
+
+4. Implement map instructions consisting of getting the task id corresponding file, turn the file to a key value pairs, put each key value its corresponding file based on nreduce modulo calculation
+
+5. Implement reduce instructions consisting of getting a task id ( task correspond to the number of reducers ), get all the files, concatenate them, sort them, apply reduce funtion and then put them on a file
+
+
