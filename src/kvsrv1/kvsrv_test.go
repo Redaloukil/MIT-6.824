@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"6.5840/kvsrv1/rpc"
-	"6.5840/kvtest1"
+	kvtest "6.5840/kvtest1"
 )
 
 // Test Put with a single client and a reliable network
@@ -21,6 +21,7 @@ func TestReliablePut(t *testing.T) {
 	ts.Begin("One client and reliable Put")
 
 	ck := ts.MakeClerk()
+
 	if err := ck.Put("k", Val, Ver); err != rpc.OK {
 		t.Fatalf("Put err %v", err)
 	}
